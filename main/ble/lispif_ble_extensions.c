@@ -1158,19 +1158,22 @@ static lbm_value ext_ble_attr_get_value(lbm_value *args, lbm_uint argn) {
  * signature: (ble-attr-set-value handle:number value:byte-array)
  */
 static lbm_value ext_ble_attr_set_value(lbm_value *args, lbm_uint argn) {
-	if (argn != 2 && !lbm_is_number(args[0]) && !lbm_is_array_r(args[1])) {
+	if (argn != 2 || !lbm_is_number(args[0]) ) {
 		return ENC_SYM_TERROR;
 	}
 
-	uint16_t handle = (uint16_t)lbm_dec_as_u32(args[0]);
-	uint16_t len    = (uint16_t)lbm_heap_array_get_size(args[1]);
-	const uint8_t *value  = lbm_heap_array_get_data_ro(args[1]);
+	uint16_t handle = (uint16_t)lbm_dec_as_u32(args[0]);	
+	lbm_array_header_t *value = lbm_dec_array_header(args[1]);
 	if (value == NULL) {
-		// Maybe return internal error here?
-		return ENC_SYM_EERROR;
+		return ENC_SYM_TERROR;
 	}
 
-	custom_ble_result_t result = custom_ble_set_attr_value(handle, len, value);
+	custom_ble_result_t result = custom_ble_set_attr_value(
+	    handle, 
+		(uint16_t) value->size, 
+		(uint8_t*) value->data
+	);
+	
 	switch (result) {
 		case CUSTOM_BLE_OK: {
 			return ENC_SYM_TRUE;
