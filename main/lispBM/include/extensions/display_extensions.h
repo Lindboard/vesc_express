@@ -177,7 +177,7 @@ color_format_t sym_to_color_format(lbm_value v);
 uint32_t image_dims_to_size_bytes(color_format_t fmt, uint16_t width, uint16_t height);
 
 void putpixel(image_buffer_t* img, int x_i, int y_i, uint32_t c);
-uint32_t getpixel(image_buffer_t* img, int x_i, int y_i);
+uint32_t getpixel(const image_buffer_t* img, int x_i, int y_i);
 
 bool lbm_display_is_color(lbm_value v);
 uint32_t lbm_display_rgb888_from_color(color_t color, int x, int y);
