@@ -19,6 +19,7 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include "sys/types.h"
 #include "tjpgd.h"
 
 #include <math.h>
@@ -27,6 +28,7 @@
 #include <lbm_utils.h>
 #include <lbm_defrag_mem.h>
 
+#define MAX(a,b) (((a)>(b))?(a):(b))
 #define MAX_WIDTH 32000
 #define MAX_HEIGHT 32000
 
@@ -102,6 +104,9 @@ static lbm_uint symbol_dotted = 0;
 static lbm_uint symbol_scale = 0;
 static lbm_uint symbol_rotate = 0;
 static lbm_uint symbol_resolution = 0;
+static lbm_uint symbol_tile = 0;
+static lbm_uint symbol_clip = 0;
+
 
 static lbm_uint symbol_regular = 0;
 static lbm_uint symbol_gradient_x = 0;
@@ -325,6 +330,8 @@ static bool register_symbols(void) {
   res = res && lbm_add_symbol_const("scale", &symbol_scale);
   res = res && lbm_add_symbol_const("rotate", &symbol_rotate);
   res = res && lbm_add_symbol_const("resolution", &symbol_resolution);
+  res = res && lbm_add_symbol_const("tile", &symbol_tile);
+  res = res && lbm_add_symbol_const("clip", &symbol_clip);
 
   res = res && lbm_add_symbol_const("regular", &symbol_regular);
   res = res && lbm_add_symbol_const("gradient_x", &symbol_gradient_x);
@@ -592,7 +599,7 @@ void putpixel(image_buffer_t* img, int x_i, int y_i, uint32_t c) {
   }
 }
 
-uint32_t getpixel(image_buffer_t* img, int x_i, int y_i) {
+uint32_t getpixel(const image_buffer_t* img, int x_i, int y_i) {
   uint16_t w = img->width;
   uint16_t h = img->height;
   uint16_t x = (uint16_t)x_i;
@@ -1784,48 +1791,70 @@ static void img_putc(image_buffer_t *img, int x, int y, uint32_t *colors, int nu
   }
 }
 
-void blit_rot_scale(
-                    image_buffer_t *img_dest,
-                    image_buffer_t *img_src,
-                    int x, int y, // Where on display
-                    float xr, float yr, // Pixel to rotate around
-                    float rot, // Rotation angle in degrees
-                    float scale, // Scale factor
-                    int32_t transparent_color) {
+int euclidean_mod(int x, int y){
+    x = x % y;
+    if (x < 0) x = x + y;
+    return x;
+}
 
+static void raster_op(
+    const image_buffer_t *img_src, 
+    image_buffer_t *img_dest, 
+    int src_x, int src_y, 
+    int dest_x, 
+    int dest_y, 
+    uint32_t transparent_color,
+    bool tile
+) {
+    int src_w = img_src->width;
+    int src_h = img_src->height;
+    
+    if (tile) {
+        src_x = euclidean_mod(src_x, src_w);
+        src_y = euclidean_mod(src_y, src_h);
+    }
+    
+    if (src_x >= 0 && src_x < src_w && src_y >= 0 && src_y < src_h) {
+        uint32_t p = getpixel(img_src, src_x, src_y);
+        if (p != (uint32_t) transparent_color) {
+            putpixel(img_dest, dest_x, dest_y, p);
+        }
+    }
+}
+
+void blit_rot_scale(
+    image_buffer_t *img_dest,
+    const image_buffer_t *img_src,
+    int x, int y, // Where on dest to start blitting
+    float xr, float yr, // Pixel to rotate around
+    float rot, // Rotation angle in degrees
+    float scale, // Scale factor
+    int32_t transparent_color, // -1 for no transparency
+    bool tile, // Tile the image
+    int clip_x, int clip_y, int clip_w, int clip_h // Clip in dest
+) {
+                        
   int src_w = img_src->width;
   int src_h = img_src->height;
-  int des_w = img_dest->width;
-  int des_h = img_dest->height;
 
-  int des_x_start = 0; // TODO: strange code. Vars hold known values..
-  int des_y_start = 0;
-  int des_x_end = des_w; //(des_x_start + des_w);
-  int des_y_end = des_h; //(des_y_start + des_h);
-
-  //if (des_x_start < 0) des_x_start = 0; // but here we check what they are and change.
-  //if (des_x_end > des_w) des_x_end = des_w; //TODO: This condition is always false.
-  //if (des_y_start < 0) des_y_start = 0;
-  //if (des_y_end > des_h) des_y_end = des_h;
-
+  int dest_x_start = MAX(x, clip_x);
+  int dest_y_start = MAX(y, clip_y);
+  int dest_x_end = dest_x_start + MIN(src_w, clip_w);
+  int dest_y_end = dest_y_start + MIN(src_h, clip_h);
+  
+  if (tile) {
+    dest_x_start  = clip_x;
+    dest_y_start = clip_y;
+    dest_x_end = dest_x_start + clip_w;
+    dest_y_end = dest_y_start + clip_h;
+  }
+  
   if (rot == 0.0 && scale == 1.0) {
-    if (x > 0) des_x_start += x;
-    if (y > 0) des_y_start += y;
-    if ((des_x_end - x) > src_w) des_x_end = src_w + x;
-    if ((des_y_end - y) > src_h) des_y_end = src_h + y;
-
-    for (int j = des_y_start; j < des_y_end; j++) {
-      for (int i = des_x_start; i < des_x_end; i++) {
-        int px = i - x;
-        int py = j - y;
-
-        if (px >= 0 && px < src_w && py >= 0 && py < src_h) {
-          uint32_t p = getpixel(img_src, px, py);
-
-          if (p != (uint32_t) transparent_color) {
-            putpixel(img_dest, i, j, p);
-          }
-        }
+    for (int dest_y = dest_y_start; dest_y < dest_y_end; dest_y++) {
+      for (int dest_x = dest_x_start; dest_x < dest_x_end; dest_x++) {
+        int src_x = dest_x - x;
+        int src_y = dest_y - y;
+        raster_op(img_src, img_dest, src_x, src_y, dest_x, dest_y, transparent_color, tile);
       }
     }
   } else if (rot == 0.0) {
@@ -1838,24 +1867,17 @@ void blit_rot_scale(
     int yr_i = (int)yr;
     int scale_i = (int)(scale * (float) fp_scale);
 
-    for (int j = des_y_start; j < des_y_end; j++) {
-      for (int i = des_x_start; i < des_x_end; i++) {
-        int px = (i - x - xr_i) * fp_scale;
-        int py = (j - y - yr_i) * fp_scale;
+    for (int dest_y = dest_y_start; dest_y < dest_y_end; dest_y++) {
+      for (int dest_x = dest_x_start; dest_x < dest_x_end; dest_x++) {
+        int px = (dest_x - x - xr_i) * fp_scale;
+        int py = (dest_y - y - yr_i) * fp_scale;
 
         px += xr_i * fp_scale;
         py += yr_i * fp_scale;
 
         px /= scale_i;
         py /= scale_i;
-
-        if (px >= 0 && px < src_w && py >= 0 && py < src_h) {
-          uint32_t p = getpixel(img_src, px, py);
-
-          if (p != (uint32_t) transparent_color) {
-            putpixel(img_dest, i, j, p);
-          }
-        }
+        raster_op(img_src, img_dest, px,  py,  dest_x,  dest_y, transparent_color, tile);
       }
     }
   } else {
@@ -1873,24 +1895,17 @@ void blit_rot_scale(
     int yr_i = (int)yr;
     int scale_i = (int)(scale * (float) fp_scale);
 
-    for (int j = des_y_start; j < des_y_end; j++) {
-      for (int i = des_x_start; i < des_x_end; i++) {
-        int px = (i - x - xr_i) * cr_i + (j - y - yr_i) * sr_i;
-        int py = -(i - x - xr_i) * sr_i + (j - y - yr_i) * cr_i;
+    for (int dest_y = dest_y_start; dest_y < dest_y_end; dest_y++) {
+      for (int dest_x = dest_x_start; dest_x < dest_x_end; dest_x++) {
+        int src_x = (dest_x - x - xr_i) * cr_i + (dest_y - y - yr_i) * sr_i;
+        int src_y = -(dest_x - x - xr_i) * sr_i + (dest_y - y - yr_i) * cr_i;
 
-        px += xr_i * fp_scale;
-        py += yr_i * fp_scale;
+        src_x += xr_i * fp_scale;
+        src_y += yr_i * fp_scale;
 
-        px /= scale_i;
-        py /= scale_i;
-
-        if (px >= 0 && px < src_w && py >= 0 && py < src_h) {
-          uint32_t p = getpixel(img_src, px, py);
-
-          if (p != (uint32_t) transparent_color) {
-            putpixel(img_dest, i, j, p);
-          }
-        }
+        src_x /= scale_i;
+        src_y /= scale_i;
+        raster_op(img_src, img_dest, src_x,  src_y,  dest_x,  dest_y, transparent_color, tile);
       }
     }
   }
@@ -1898,7 +1913,7 @@ void blit_rot_scale(
 
 // Extensions
 
-#define ATTR_MAX_ARGS	3
+#define ATTR_MAX_ARGS	4
 #define ARG_MAX_NUM		8
 
 typedef struct {
@@ -1918,6 +1933,8 @@ typedef struct {
   attr_t attr_scale;
   attr_t attr_rotate;
   attr_t attr_resolution;
+  attr_t attr_tile;
+  attr_t attr_clip;
 } img_args_t;
 
 static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) {
@@ -1933,7 +1950,6 @@ static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) 
     res.img.fmt = image_buffer_format((uint8_t*)arr->data);
     res.img.mem_base = (uint8_t*)arr->data;
     res.img.data = image_buffer_data((uint8_t*)arr->data);
-
 
     int num_dec = 0;
     for (unsigned int i = 1;i < argn;i++) {
@@ -1981,7 +1997,14 @@ static img_args_t decode_args(lbm_value *args, lbm_uint argn, int num_expected) 
             } else if (lbm_dec_sym(arg) == symbol_resolution) {
               attr_now = &res.attr_resolution;
               attr_now->arg_num = 1;
-            } else {
+            } else if (lbm_dec_sym(arg) == symbol_tile) {
+              attr_now = &res.attr_tile;
+              attr_now->arg_num = 0;
+            } else if (lbm_dec_sym(arg) == symbol_clip) {
+              attr_now = &res.attr_clip;
+              attr_now->arg_num = 4;
+            }
+            else {
               return res;
             }
           } else {
@@ -2692,17 +2715,35 @@ static lbm_value ext_blit(lbm_value *args, lbm_uint argn) {
     if (arg_dec.attr_scale.is_valid) {
       scale = lbm_dec_as_float(arg_dec.attr_scale.args[0]);
     }
+    
+    int dest_clip_x = 0;
+    int dest_clip_y = 0;
+    int dest_clip_w = dest_buf.width;
+    int dest_clip_h = dest_buf.height;
+    
+    if (arg_dec.attr_clip.is_valid) {
+      dest_clip_x = lbm_dec_as_i32(arg_dec.attr_clip.args[0]);
+      dest_clip_y = lbm_dec_as_i32(arg_dec.attr_clip.args[1]);
+      dest_clip_w = lbm_dec_as_i32(arg_dec.attr_clip.args[2]);
+      dest_clip_h = lbm_dec_as_i32(arg_dec.attr_clip.args[3]);
+    }
 
     blit_rot_scale(
-                   &dest_buf,
-                   &arg_dec.img,
-                   lbm_dec_as_i32(arg_dec.args[0]),
-                   lbm_dec_as_i32(arg_dec.args[1]),
-                   lbm_dec_as_float(arg_dec.attr_rotate.args[0]),
-                   lbm_dec_as_float(arg_dec.attr_rotate.args[1]),
-                   lbm_dec_as_float(arg_dec.attr_rotate.args[2]),
-                   scale,
-                   lbm_dec_as_i32(arg_dec.args[2]));
+        &dest_buf,
+        &arg_dec.img,
+        lbm_dec_as_i32(arg_dec.args[0]),
+        lbm_dec_as_i32(arg_dec.args[1]),
+        lbm_dec_as_float(arg_dec.attr_rotate.args[0]),
+        lbm_dec_as_float(arg_dec.attr_rotate.args[1]),
+        lbm_dec_as_float(arg_dec.attr_rotate.args[2]),
+        scale,
+        lbm_dec_as_i32(arg_dec.args[2]),
+        arg_dec.attr_tile.is_valid,
+        dest_clip_x,
+        dest_clip_y,
+        dest_clip_w,
+        dest_clip_h
+    );
     res = ENC_SYM_TRUE;
   }
   return res;
