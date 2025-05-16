@@ -730,7 +730,7 @@ bool lispif_restart(bool print, bool load_code, bool load_imports) {
 					GC_STACK_SIZE,
 					PRINT_STACK_SIZE,
 					extension_storage, EXTENSION_STORAGE_SIZE + USER_EXTENSION_STORAGE_SIZE);
-			lbm_eval_init_events(20);
+			lbm_eval_init_events(30);
 
 			lbm_set_timestamp_us_callback(timestamp_callback);
 			lbm_set_usleep_callback(sleep_callback);
